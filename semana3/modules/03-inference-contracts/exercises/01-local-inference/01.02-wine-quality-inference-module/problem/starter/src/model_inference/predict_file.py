@@ -1,8 +1,3 @@
-"""TODO: script CLI que encadena contratos, preprocesado e inferencia."""
-
-# Implementa el comando:
-# python -m model_inference.predict_file --input <csv> --output <csv>
-# No dejes un archivo de salida parcial si alguna fila es inválida.
 """CLI: python -m model_inference.predict_file --input <csv> --output <csv>"""
 
 from __future__ import annotations
@@ -44,15 +39,17 @@ def predict_file(
         bundle = load_wine_quality_model(model_path)
         results = []
         for line, row in enumerate(read_rows(input_path), start=2):
+            sample_id = row.pop("sample_id", None)
             try:
-                sample_id = row.pop("sample_id", None)
                 if not sample_id:
                     raise ValueError("falta sample_id")
                 request = WineQualityRequest.model_validate(row)
                 features = preprocess_wine_request(request)
                 prediction = infer_wine_quality(bundle, features)
             except ValueError as error:
-                raise ValueError(f"fila {line}: {error}") from error
+                raise ValueError(
+                    f"fila {line} (sample_id={sample_id!r}): {error}"
+                ) from error
             results.append({"sample_id": sample_id, **prediction.model_dump()})
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
@@ -79,6 +76,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     arguments = parse_args()
-    raise SystemExit(
-        predict_file(arguments.input, arguments.output, arguments.model)
-    )
+    raise SystemExit(predict_file(arguments.input, arguments.output, arguments.model))

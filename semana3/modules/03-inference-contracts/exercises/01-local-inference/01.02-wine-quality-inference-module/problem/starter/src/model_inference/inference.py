@@ -1,7 +1,3 @@
-"""TODO: carga del .joblib e inferencia sobre características preparadas."""
-
-# Declara DEFAULT_MODEL_PATH, load_wine_quality_model() e infer_wine_quality().
-# Comprueba las características del artefacto antes de llamar al clasificador.
 """Carga del .joblib e inferencia."""
 
 from pathlib import Path
@@ -28,13 +24,20 @@ def load_wine_quality_model(path: Path = DEFAULT_MODEL_PATH) -> dict:
 
     if not isinstance(bundle, dict):
         raise ValueError("El artefacto debe ser un diccionario")
-    for key in ("estimator", "feature_names", "model_version"):
+    if "estimator" not in bundle:
+        raise ValueError(
+            "El artefacto no contiene un clasificador compatible (falta 'estimator')"
+        )
+    for key in ("feature_names", "model_version"):
         if key not in bundle:
             raise ValueError(f"Falta la clave '{key}' en el artefacto")
 
     estimator = bundle["estimator"]
     if not (hasattr(estimator, "predict") and hasattr(estimator, "predict_proba")):
-        raise ValueError("El estimador debe tener predict y predict_proba")
+        raise ValueError(
+            "El artefacto no contiene un clasificador compatible "
+            "(necesita predict y predict_proba)"
+        )
     if tuple(bundle["feature_names"]) != FEATURE_NAMES:
         raise ValueError("feature_names del modelo no coincide con FEATURE_NAMES")
     if not bundle["model_version"]:
