@@ -10,6 +10,7 @@ from typing import Any
 from model_ui.contracts import PredictionPayload
 from model_ui.errors import ArtifactUnavailableError, InputContractError
 from model_ui.gateway import InferenceGateway, PackagedBundleGateway
+from model_ui.presentation import confidence_caption, quality_label
 from model_ui.ui_schema import FIELD_SPECS
 
 
@@ -40,22 +41,51 @@ def render_inference_error(st: Any) -> None:
 
 
 def collect_values(st: Any) -> tuple[bool, dict[str, float]]:
-    """TODO: renderiza ``FIELD_SPECS`` dentro de un único ``st.form``.
+    """Renderiza ``FIELD_SPECS`` dentro de un único ``st.form``.
 
-    Cada ``number_input`` debe recibir label, rango, default, step y una key
-    estable. Devuelve ``(submitted, values)`` sin llamar al gateway.
+    Cada ``number_input`` recibe label, rango, default, step y una key estable.
+    Devuelve ``(submitted, values)`` sin llamar al gateway.
     """
 
-    raise NotImplementedError(
-        f"TODO: renderiza los {len(FIELD_SPECS)} campos de FIELD_SPECS"
-    )
+    values: dict[str, float] = {}
+    with st.form("wine_quality_form"):
+        for field in FIELD_SPECS:
+            values[field.name] = st.number_input(
+                field.label,
+                min_value=field.min_value,
+                max_value=field.max_value,
+                value=field.default,
+                step=field.step,
+                format="%g",
+                key=f"input_{field.name}",
+            )
+        submitted = st.form_submit_button("Ejecutar inferencia")
+    return submitted, values
 
 
 def render_prediction(st: Any, prediction: PredictionPayload) -> None:
-    """TODO: presenta los cuatro campos de ``PredictionPayload``."""
+    """Presenta los cuatro campos de ``PredictionPayload`` con copy honesto."""
 
-    raise NotImplementedError(
-        "TODO: presenta quality_band, confidence y las dos versiones"
+    label = quality_label(prediction)
+    if prediction.quality_band == "needs_review":
+        st.info(label)
+    else:
+        st.success(label)
+
+    first_row = st.columns(2)
+    first_row[0].metric("Banda de calidad (quality_band)", prediction.quality_band)
+    first_row[1].metric("Confianza (confidence)", f"{prediction.confidence:.2f}")
+    second_row = st.columns(2)
+    second_row[0].metric("Versión del modelo (model_version)", prediction.model_version)
+    second_row[1].metric(
+        "Versión del preprocesado (preprocessing_version)",
+        prediction.preprocessing_version,
+    )
+
+    st.caption(confidence_caption(prediction))
+    st.caption(
+        "La confianza es la mayor probabilidad que reporta el modelo; no garantiza "
+        "que la calidad real del vino sea la indicada. Resultado orientativo."
     )
 
 

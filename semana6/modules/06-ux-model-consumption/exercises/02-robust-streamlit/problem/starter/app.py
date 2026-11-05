@@ -74,15 +74,78 @@ def collect_values(st: Any) -> tuple[bool, dict[str, float]]:
 
 
 def get_cached_gateway(st: Any, bundle_value: str | None) -> InferenceGateway:
-    """TODO: usa `st.cache_resource` sobre el gateway, no sobre la respuesta."""
+    """Devuelve el gateway como recurso de Streamlit, no una respuesta.
 
-    raise NotImplementedError("TODO: cachea el gateway heredado de S5")
+    ``st.cache_resource`` conserva un único gateway (el bundle ya cargado) entre
+    reruns y sesiones. Es seguro compartirlo porque solo se lee. El argumento de
+    la caché es la ruta configurada; los valores del formulario y las
+    predicciones de una persona nunca entran en la caché.
+    """
+
+    cached_builder = st.cache_resource(show_spinner=False)(build_gateway)
+    return cached_builder(bundle_value)
 
 
 def render_state(st: Any, state: UiState, target: Any | None = None) -> None:
-    """TODO: presenta idle/loading/success/error en un target de Streamlit."""
+    """Presenta idle/loading/success/error en un target de Streamlit.
 
-    raise NotImplementedError("TODO: renderiza el estado sin mostrar excepciones")
+    Con ``target`` (por ejemplo un ``st.empty()``) sustituye el contenido de ese
+    hueco; sin él, dibuja en la página. Nunca muestra excepciones: solo el copy
+    ya traducido por ``presentation.py``.
+    """
+
+    destination = target if target is not None else st
+    with destination.container():
+        if state.phase == "idle":
+            st.info("Completa el formulario y pulsa «Ejecutar inferencia».")
+        elif state.phase == "loading":
+            with st.status(
+                "Validando la muestra y ejecutando el modelo…",
+                state="running",
+                expanded=False,
+            ):
+                st.write("El formulario se mantiene; el resultado aparecerá aquí.")
+        elif state.phase == "success" and state.view is not None:
+            _render_success(st, state)
+        elif state.phase == "error" and state.error is not None:
+            error = state.error
+            st.error(error.title)
+            st.write(error.message)
+            st.info(error.recovery)
+            st.caption(f"Request ID: {error.request_id}")
+        else:
+            st.info("Completa el formulario y pulsa «Ejecutar inferencia».")
+
+
+def _render_success(st: Any, state: UiState) -> None:
+    """Resultado: categoría, confianza y latencia; trazabilidad aplazada."""
+
+    view = state.view
+    assert view is not None
+    category, confidence, latency = st.columns(3)
+    category.metric("Resultado", view.quality_label)
+    confidence.metric("Confianza", f"{view.confidence:.0%}")
+    latency.metric("Latencia", f"{view.latency_ms:.0f} ms")
+
+    confidence_text = f"{view.confidence_label}: {view.confidence_message}"
+    if view.confidence_level == "low":
+        st.warning(confidence_text)
+    else:
+        st.info(confidence_text)
+
+    if view.latency_status == "above_target":
+        st.warning(f"{view.latency_label}: {view.latency_message}")
+    else:
+        st.caption(f"{view.latency_label}: {view.latency_message}")
+
+    with st.expander("Trazabilidad"):
+        st.json(
+            {
+                "model_version": view.model_version,
+                "preprocessing_version": view.preprocessing_version,
+                "request_id": state.request_id,
+            }
+        )
 
 
 def main() -> None:
@@ -107,34 +170,40 @@ def main() -> None:
 
     submitted, values = collect_values(st)
     state_slot = st.empty()
+
+    def show(event: UiState) -> None:
+        render_state(st, event, state_slot)
+
+    # Los botones se leen antes de dibujar el resultado para que su efecto se
+    # vea en esta misma ejecución. «Reintentar» vive en un hueco propio: se
+    # muestra si el estado final es un error y se retira si deja de serlo.
+    previous = st.session_state[LAST_STATE_KEY]
+    last_values = st.session_state[LAST_VALUES_KEY]
+    clear_column, retry_column = st.columns(2)
+    retry_slot = retry_column.empty()
+    clear_clicked = clear_column.button("Limpiar último resultado")
+    retry_clicked = False
+    retry_shown = False
+    if previous.phase == "error" and last_values:
+        retry_clicked = retry_slot.button("Reintentar", key="retry")
+        retry_shown = True
+
     if submitted:
         st.session_state[LAST_VALUES_KEY] = values
-        with st.status("Ejecutando inferencia…", expanded=False) as status:
-            state = controller.submit(
-                values,
-                emit=lambda event: render_state(st, event, state_slot),
-            )
-            st.session_state[LAST_STATE_KEY] = state
-            status.update(
-                label=(
-                    "Inferencia completada"
-                    if state.phase == "success"
-                    else "La inferencia necesita atención"
-                ),
-                state="complete" if state.phase == "success" else "error",
-            )
-
-    if st.button("Limpiar último resultado"):
+        st.session_state[LAST_STATE_KEY] = controller.submit(values, emit=show)
+    elif retry_clicked:
+        st.session_state[LAST_STATE_KEY] = controller.submit(last_values, emit=show)
+    elif clear_clicked:
         clear_last_state(st.session_state)
-        st.rerun()
 
     state = st.session_state[LAST_STATE_KEY]
-    render_state(st, state)
-    if state.phase == "error" and st.session_state[LAST_VALUES_KEY]:
-        if st.button("Reintentar"):
-            retry_state = controller.submit(st.session_state[LAST_VALUES_KEY])
-            st.session_state[LAST_STATE_KEY] = retry_state
-            st.rerun()
+    render_state(st, state, state_slot)
+
+    can_retry = state.phase == "error" and bool(st.session_state[LAST_VALUES_KEY])
+    if can_retry and not retry_shown:
+        retry_slot.button("Reintentar", key="retry")
+    elif not can_retry and retry_shown:
+        retry_slot.empty()
 
     st.divider()
     st.subheader("Telemetría de la sesión")
