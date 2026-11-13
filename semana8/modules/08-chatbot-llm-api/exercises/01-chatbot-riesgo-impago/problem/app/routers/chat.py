@@ -7,4 +7,7 @@ from app.services.orquestador import responder
 router = APIRouter()
 
 
-# TODO: POST /chat (entrada ChatEntrada, salida ChatSalida). Recibe el LLM con Depends(get_llm)
+@router.post("/chat", response_model=ChatSalida)
+def chat(entrada: ChatEntrada, llm=Depends(get_llm)):
+    # El LLM llega por Depends para que los tests lo sustituyan por uno falso
+    return responder(entrada.mensajes, llm)
