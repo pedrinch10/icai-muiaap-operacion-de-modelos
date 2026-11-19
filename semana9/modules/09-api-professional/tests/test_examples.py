@@ -55,6 +55,15 @@ def test_validation_error_uses_the_envelope(errors_client: TestClient) -> None:
     assert response.json()["error"]["fields"][0]["field"] == "age"
 
 
+def test_zero_income_is_rejected_with_the_field_name(
+    errors_client: TestClient,
+) -> None:
+    response = errors_client.post("/v1/scores", json={"age": 30, "income": 0})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["fields"][0]["field"] == "income"
+
+
 def test_unknown_route_uses_the_envelope(errors_client: TestClient) -> None:
     response = errors_client.get("/v1/nothing")
 

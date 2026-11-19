@@ -4,42 +4,75 @@ Cada test empieza en rojo con `pytest.fail`. Sustituye esa línea por el test
 real; la entrega se considera completa cuando toda la suite está en verde.
 """
 
+import json
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
-from wine_api.dependencies import get_predictor  # noqa: F401 - pista S9.4a
-from wine_api.predictor import UnavailablePredictor  # noqa: F401 - pista S9.4a
+from wine_api.dependencies import get_predictor
+from wine_api.export_openapi import render_openapi
+from wine_api.predictor import UnavailablePredictor
+
+CONTRACT_PATH = Path(__file__).resolve().parents[1] / "contracts" / "openapi.json"
 
 
 def test_prediction_returns_503_when_model_is_unavailable(
     client: TestClient, valid_payload: dict
 ) -> None:
-    # TODO S9.4a: sin tocar el código de la API, haz que `get_predictor`
-    # devuelva un UnavailablePredictor con `app.dependency_overrides` (llega
-    # desde `client.app`). Comprueba status 503 y `error.code`. Limpia el
-    # override al terminar para no contaminar otros tests.
-    pytest.fail("TODO S9.4a")
+    client.app.dependency_overrides[get_predictor] = lambda: UnavailablePredictor()
+    try:
+        response = client.post("/v1/predictions", json=valid_payload)
+    finally:
+        client.app.dependency_overrides.pop(get_predictor, None)
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "model_unavailable"
+    assert get_predictor not in client.app.dependency_overrides
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("alcohol", 4.99),  # justo por debajo del mínimo
+        ("alcohol", 20.01),  # justo por encima del máximo
+        ("ph", None),
+        ("density", "denso"),
+        ("chlorides", -0.001),
+        ("citric_acid", True),  # un booleano no es un número
+    ],
+)
 def test_out_of_contract_values_are_rejected(
-    client: TestClient, valid_payload: dict
+    client: TestClient, valid_payload: dict, field: str, value: object
 ) -> None:
-    # TODO S9.4b: convierte este test en `@pytest.mark.parametrize` con al
-    # menos cinco casos (justo por debajo y por encima de un rango, None, un
-    # texto...). Para cada uno comprueba 422 y que `fields` señala exactamente
-    # `features.<campo>`.
-    pytest.fail("TODO S9.4b")
+    valid_payload["features"][field] = value
+
+    response = client.post("/v1/predictions", json=valid_payload)
+
+    assert response.status_code == 422
+    fields = [item["field"] for item in response.json()["error"]["fields"]]
+    assert fields == [f"features.{field}"]
 
 
-def test_range_limits_are_inclusive(client: TestClient, valid_payload: dict) -> None:
-    # TODO S9.4c: los límites del contrato son inclusivos. Demuéstralo con los
-    # dos extremos de `alcohol` (5 y 20): ambos deben devolver 200.
-    pytest.fail("TODO S9.4c")
+@pytest.mark.parametrize("alcohol", [5, 20])
+def test_range_limits_are_inclusive(
+    client: TestClient, valid_payload: dict, alcohol: int
+) -> None:
+    valid_payload["features"]["alcohol"] = alcohol
+
+    response = client.post("/v1/predictions", json=valid_payload)
+
+    assert response.status_code == 200
 
 
 def test_openapi_matches_versioned_contract() -> None:
-    # TODO S9.4d: genera `contracts/openapi.json` con
-    # `uv run python -m wine_api.export_openapi` y versiónalo en Git. Después
-    # compara el JSON de `render_openapi()` con el archivo: si alguien cambia el
-    # contrato sin querer, este test lo detecta en la revisión.
-    pytest.fail("TODO S9.4d")
+    assert CONTRACT_PATH.exists(), (
+        "Falta contracts/openapi.json: genera el snapshot con "
+        "`uv run python -m wine_api.export_openapi`."
+    )
+    versioned = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+
+    assert json.loads(render_openapi()) == versioned, (
+        "El contrato OpenAPI ha cambiado: revisa si es compatible, sube la "
+        "versión y vuelve a exportar el snapshot."
+    )
